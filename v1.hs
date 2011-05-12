@@ -4,23 +4,37 @@ import System.Environment
 import Text.ParserCombinators.Parsec hiding (spaces)
 import Monad
 import Data.List
+import System.IO
+import Data.Char
+import Data.Maybe
 
 testStr = "ReturnType myFunc(ParamA paramA) \n  foo\n  bar\n  baz\n"
 
 data Clib = Clib [Class]
   deriving (Show, Eq)
 
-data Class = Class [Method]
+data Class = Class 
+  { cName :: String
+  , cPreIncludes :: [Include]
+  , cIncludes :: [Include] 
+  , cMethods :: [Method]
+  } deriving (Show, Eq)
+
+data Method = Method Identifier Identifier ParameterList String
   deriving (Show, Eq)
 
-data Method = Method Identifier ParameterList String
-  deriving (Show, Eq)
+data MethodName = SimpleName String
+                | Operator String
 
-data ParameterList = ParameterList [Parameter]
+data ParameterList = ParameterList String
   deriving (Show, Eq)
 
 data Parameter = Parameter Identifier Identifier
   deriving (Show, Eq)
+
+data Include = Include String
+  deriving (Show, Eq)
+
 
 type Type = String
 data Identifier = Identifier String
@@ -31,7 +45,7 @@ symbol :: Parser Char
 symbol = oneOf "!$%&|*+-/:<=>?@^_~"
 
 readExpr :: String -> String
-readExpr input = case parse (spaces >> symbol) "lisp" input of
+readExpr input = case parse (spaces >> parseList) "list" input of
     Left err -> "No match: " ++ show err
     Right val -> "Found value"
 
@@ -41,12 +55,22 @@ spaces = skipMany1 space
 main :: IO ()
 main = do 
   args <- getArgs
-  putStrLn (readExpr (args !! 0))
+  fileContent <- readFile (args !! 0)
+  let mBclassR = readClass fileContent
+  case mBclassR of
+    Left err -> do
+          putStrLn $ show err
+    Right classR -> do
+          let hed = mkHeader classR
+          let impl = mkImpl classR
+          putStrLn hed
+          putStrLn $ take 20 $ repeat '-'
+          putStrLn impl
+          writeFile ((lowerStr (cName classR)) ++ ".h") hed  
+          writeFile ((lowerStr (cName classR)) ++ ".c") impl  
 
-readIdentifier :: String -> String
-readIdentifier input = case parse method "sign" input of
-  Left err -> "No match:" ++ (show err)
-  Right val -> show val
+readClass :: String -> Either ParseError Class
+readClass input = parse clazz "sign" input
 
 identStart = oneOf "_"
 
@@ -58,27 +82,53 @@ identifier = do
   return $ Identifier nameStr
 
 signature = do
-  returnType <- identifier
-  _ <- spaces
-  funcName <- identifier
+  
+  funcNameAntType <- many (noneOf "(")
+  let (returnType, funcName) = splitTypeAndName funcNameAntType
   char '('
   parameters <- parseList
   char ')'  
   skipMany $ oneOf " "
   char '\n'
-  return $ (funcName, parameters)
+  return $ (Identifier returnType, (Identifier funcName), parameters)
 
---many0 = optional many1
---many0 = fst . manies
+operators = ["=", "==", "+", "+", "-", "*", "+=", "-=", "*=", "!="]
+operators' = map ((flip (++)) (reverse "operator")) operators 
+identifierChars = "qwertzuiopasdfghjklyxcvbnmQWERTZUIOPASDFGHJKLYXCVBNM123456789_"
 
-skipOne c = do
-  _ <- char c
-  return ()
+contains xs s = isJust $ find (\c -> c == s) xs
 
---commaSeparator = (skipMany1 space) >> (skipOne ',') >> (skipMany1 space)
-commaSeparator :: Parser ()
-commaSeparator = (skipMany1 space)>> (skipOne ',') >> (skipMany1 space)
+isIdentC = contains identifierChars
 
+splitTypeAndName :: String -> (String, String)
+splitTypeAndName s = choose (testOperator s)
+  where
+    choose Nothing = splitTypeAndName' s
+    choose (Just t) = t
+
+splitTypeAndName' :: String -> (String, String)
+splitTypeAndName' input = (reverse t, reverse h)
+  where
+    rvsd = reverse input
+    identS = fromJust $ findIndex (not . isIdentC) rvsd
+    (h, t) = splitAt identS rvsd
+    
+-- test if method is an overloaded operator
+testOperator :: String -> Maybe (String, String)
+testOperator s = if null filtered then
+                  Nothing
+                  else
+                    Just $ head filtered
+  where
+    both = zip operators' (repeat (reverse s))
+    filtered = [ ( (reverse . (drop (length op))) full, reverse op) | (op, full) <- both, op `isPrefixOf` full] 
+
+
+--declaration :: Parser ()
+declaration = do
+  l0 <- try (char '_')
+  return l0
+  
 
 parameter = do
   paramType <- identifier
@@ -87,20 +137,34 @@ parameter = do
   return $ Parameter paramType paramName
 
 parseList :: Parser ParameterList
-parseList = liftM ParameterList $ sepBy parameter commaSeparator
+parseList = do
+  s <- many $ noneOf ")"
+  return $ ParameterList s
+
+clazz :: Parser Class
+clazz = do
+  skipMany $ oneOf "\n" 
+  preIncludes <- many include
+  skipMany $ oneOf "\n" 
+  (Identifier classname) <- classSignature 
+  skipMany $ oneOf "\n" 
+  includes <- many include
+  skipMany $ oneOf "\n" 
+  methods <- many method
+  return $ Class classname preIncludes includes methods
 
 method = do
-  (name, parameters) <- signature
+  (returnType, name, parameters) <- signature
   indent <- many1 (oneOf " ")
   line1 <- many (noneOf "\n")
   char '\n'
-  --let indent = "  "
   lines <- many (prefixedLines indent)
+  char '\n'
   let all = line1:lines
-  --let lines = []
-  return $ Method name parameters (joinLines all)
+  return $ Method returnType name parameters ((joinLines . (map ((++) "  "))) all)
 
-joinLines = intercalate "\n" 
+
+joinLines = (intercalate "\n") 
 
 prefixedLines :: String -> Parser String
 prefixedLines indent = do
@@ -109,10 +173,68 @@ prefixedLines indent = do
   char '\n'
   return line1 
 
+include = do
+  string "#include"
+  spaces
+  char '"'
+  filen <- many (noneOf "\"")
+  char '"'
+  return $ Include filen
+
+classSignature = do
+  string "class"
+  spaces
+  classname <- identifier
+  return classname
 
 readPLine :: String -> String
 readPLine input = case parse (many (prefixedLines "  ")) "line00" input of
   Left err -> "No match:" ++ (show err)
   Right val -> show val
 
+mkFiles :: Class -> (String, String)
+mkFiles (Class name preIncludes includes methods) = undefined
 
+upperStr = map toUpper
+lowerStr = map toLower
+
+mkImpl :: Class -> String
+mkImpl (Class name _ includes methods) =
+  joinLines [
+      "#include \"" ++ (lowerStr name) ++ ".h\""
+    , joinLines $ map (implMethod name) methods
+    , ""
+    , renderIncludes includes
+    ]
+
+
+mkHeader :: Class -> String
+mkHeader  (Class name preIncludes includes methods) =
+  joinLines [
+      "#ifndef " ++ (upperStr name) ++ "_H"
+    , "#define " ++ (upperStr name) ++ "_H"
+    , ""
+    , renderIncludes preIncludes
+    , ""
+    , "class " ++ name ++ "{"
+    , ""
+    , joinLines $ map headerMethod methods
+    , "};"
+    , ""
+    , "#endif"
+    ]
+
+headerMethod (Method (Identifier returnT) (Identifier name) (ParameterList ps) _) =
+   "  " ++ returnT ++ " " ++ name ++ "(" ++ ps ++ ");" 
+
+implMethod className (Method (Identifier returnT) (Identifier name) (ParameterList ps) body) =
+  joinLines [
+      returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") {"
+    , body
+    , "}"
+    , ""
+    ]
+
+
+renderIncludes includes = joinLines $ map mkLne includes
+  where mkLne (Include filen) = "#include " ++ "\"" ++ filen ++ "\""
