@@ -20,7 +20,7 @@ data Class = Class
   , cMethods :: [Method]
   } deriving (Show, Eq)
 
-data Method = Method Identifier Identifier ParameterList String
+data Method = Method Visibility Identifier Identifier ParameterList String Modifier
   deriving (Show, Eq)
 
 data MethodName = SimpleName String
@@ -35,10 +35,17 @@ data Parameter = Parameter Identifier Identifier
 data Include = Include String
   deriving (Show, Eq)
 
+data Visibility = Public | Private
+  deriving (Show, Eq)
+
+data Modifier = Default | Const
+  deriving (Show, Eq)
 
 type Type = String
 data Identifier = Identifier String
   deriving (Show, Eq)
+
+
 
 
 symbol :: Parser Char
@@ -81,16 +88,33 @@ identifier = do
   let nameStr = first : rest
   return $ Identifier nameStr
 
+visibility = do
+  private <- try (string "private") <|> try (string "public") <|> string ""
+  return $ visFromStr private
+
+visFromStr "" = Private
+visFromStr "private" = Private
+visFromStr "public" = Public
+
+modifier = do
+  modStr <- try (string "const") <|> string ""
+  return $ modFromStr modStr
+
+modFromStr "" = Default
+modFromStr "const" = Const
+
+
 signature = do
-  
+  vis <- visibility
   funcNameAntType <- many (noneOf "(")
   let (returnType, funcName) = splitTypeAndName funcNameAntType
   char '('
   parameters <- parseList
   char ')'  
   skipMany $ oneOf " "
+  mod <- modifier 
   char '\n'
-  return $ (Identifier returnType, (Identifier funcName), parameters)
+  return $ (vis, Identifier returnType, (Identifier funcName), parameters, mod)
 
 operators = ["=", "==", "+", "+", "-", "*", "+=", "-=", "*=", "!="]
 operators' = map ((flip (++)) (reverse "operator")) operators 
@@ -154,14 +178,14 @@ clazz = do
   return $ Class classname preIncludes includes methods
 
 method = do
-  (returnType, name, parameters) <- signature
+  (visibility, returnType, name, parameters, modifier) <- signature
   indent <- many1 (oneOf " ")
   line1 <- many (noneOf "\n")
   char '\n'
   lines <- many (prefixedLines indent)
   char '\n'
   let all = line1:lines
-  return $ Method returnType name parameters ((joinLines . (map ((++) "  "))) all)
+  return $ Method visibility returnType name parameters ((joinLines . (map ((++) "  "))) all) modifier
 
 
 joinLines = (intercalate "\n") 
@@ -224,10 +248,10 @@ mkHeader  (Class name preIncludes includes methods) =
     , "#endif"
     ]
 
-headerMethod (Method (Identifier returnT) (Identifier name) (ParameterList ps) _) =
+headerMethod (Method v (Identifier returnT) (Identifier name) (ParameterList ps) _ _) =
    "  " ++ returnT ++ " " ++ name ++ "(" ++ ps ++ ");" 
 
-implMethod className (Method (Identifier returnT) (Identifier name) (ParameterList ps) body) =
+implMethod className (Method visibility (Identifier returnT) (Identifier name) (ParameterList ps) body _) =
   joinLines [
       returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") {"
     , body
