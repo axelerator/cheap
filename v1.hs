@@ -18,9 +18,12 @@ data Class = Class
   , cPreIncludes :: [Include]
   , cIncludes :: [Include] 
   , cMethods :: [Method]
+  , cMembers :: [Member]
   } deriving (Show, Eq)
 
-data Method = Method Visibility Identifier Identifier ParameterList String Modifier
+type Body = String
+
+data Method = Method Visibility Type Identifier ParameterList Body Modifier
   deriving (Show, Eq)
 
 data MethodName = SimpleName String
@@ -29,7 +32,7 @@ data MethodName = SimpleName String
 data ParameterList = ParameterList String
   deriving (Show, Eq)
 
-data Parameter = Parameter Identifier Identifier
+data Parameter = Parameter Type Identifier
   deriving (Show, Eq)
 
 data Include = Include String
@@ -41,7 +44,13 @@ data Visibility = Public | Private
 data Modifier = Default | Const
   deriving (Show, Eq)
 
-type Type = String
+data Member = ClassMember Visibility Type Identifier
+            | ObjectMember Visibility Type Identifier
+  deriving (Show, Eq)
+
+data Type = Type String
+  deriving (Show, Eq)
+
 data Identifier = Identifier String
   deriving (Show, Eq)
 
@@ -90,6 +99,7 @@ identifier = do
 
 visibility = do
   private <- try (string "private") <|> try (string "public") <|> string ""
+  spaces
   return $ visFromStr private
 
 visFromStr "" = Private
@@ -114,7 +124,7 @@ signature = do
   skipMany $ oneOf " "
   mod <- modifier 
   char '\n'
-  return $ (vis, Identifier returnType, (Identifier funcName), parameters, mod)
+  return $ (vis, Type returnType, (Identifier funcName), parameters, mod)
 
 operators = ["=", "==", "+", "+", "-", "*", "+=", "-=", "*=", "!="]
 operators' = map ((flip (++)) (reverse "operator")) operators 
@@ -155,10 +165,10 @@ declaration = do
   
 
 parameter = do
-  paramType <- identifier
+  (Identifier paramType) <- identifier
   _ <- spaces
   paramName <- identifier
-  return $ Parameter paramType paramName
+  return $ Parameter (Type paramType) paramName
 
 parseList :: Parser ParameterList
 parseList = do
@@ -174,8 +184,11 @@ clazz = do
   skipMany $ oneOf "\n" 
   includes <- many include
   skipMany $ oneOf "\n" 
+  members <- many $ try member
+  --foo <- many simpleMem
+  skipMany $ oneOf "\n" 
   methods <- many method
-  return $ Class classname preIncludes includes methods
+  return $ Class classname preIncludes includes methods members
 
 method = do
   (visibility, returnType, name, parameters, modifier) <- signature
@@ -186,6 +199,19 @@ method = do
   char '\n'
   let all = line1:lines
   return $ Method visibility returnType name parameters ((joinLines . (map ((++) "  "))) all) modifier
+
+member = do
+  classm <- try  (string "class") <|> string ""
+  skipMany (oneOf " ")
+  vis <- visibility
+  funcNameAntType <- many (noneOf "()\n;")
+  let (returnType, funcName) = splitTypeAndName funcNameAntType
+  char ';'
+  char '\n'
+  if classm == "class" then
+    return $ ClassMember vis (Type returnType) (Identifier funcName)
+    else
+    return $ ObjectMember vis (Type returnType) (Identifier funcName)
 
 
 joinLines = (intercalate "\n") 
@@ -217,13 +243,13 @@ readPLine input = case parse (many (prefixedLines "  ")) "line00" input of
   Right val -> show val
 
 mkFiles :: Class -> (String, String)
-mkFiles (Class name preIncludes includes methods) = undefined
+mkFiles (Class name preIncludes includes methods _) = undefined
 
 upperStr = map toUpper
 lowerStr = map toLower
 
 mkImpl :: Class -> String
-mkImpl (Class name _ includes methods) =
+mkImpl (Class name _ includes methods _) =
   joinLines [
       "#include \"" ++ (lowerStr name) ++ ".h\""
     , joinLines $ map (implMethod name) methods
@@ -233,7 +259,7 @@ mkImpl (Class name _ includes methods) =
 
 
 mkHeader :: Class -> String
-mkHeader  (Class name preIncludes includes methods) =
+mkHeader  (Class name preIncludes includes methods members) =
   joinLines [
       "#ifndef " ++ (upperStr name) ++ "_H"
     , "#define " ++ (upperStr name) ++ "_H"
@@ -243,15 +269,23 @@ mkHeader  (Class name preIncludes includes methods) =
     , "class " ++ name ++ "{"
     , ""
     , joinLines $ map headerMethod methods
+    --, joinLines $ mkMemberHeader members 
     , "};"
     , ""
     , "#endif"
     ]
 
-headerMethod (Method v (Identifier returnT) (Identifier name) (ParameterList ps) _ _) =
+mkMemberHeader members = undefined
+  where
+    (classMs, objectMs) = partition isClass members
+    isClass (ClassMember _ _ _) = True
+    isClass (ObjectMember _ _ _) = False
+
+
+headerMethod (Method v (Type returnT) (Identifier name) (ParameterList ps) _ _) =
    "  " ++ returnT ++ " " ++ name ++ "(" ++ ps ++ ");" 
 
-implMethod className (Method visibility (Identifier returnT) (Identifier name) (ParameterList ps) body _) =
+implMethod className (Method visibility (Type returnT) (Identifier name) (ParameterList ps) body _) =
   joinLines [
       returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") {"
     , body
