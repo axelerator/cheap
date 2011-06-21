@@ -1,8 +1,8 @@
+
 module Main where
 import System.Environment
 
 import Text.ParserCombinators.Parsec hiding (spaces)
-import Monad
 import Data.List
 import System.IO
 import Data.Char
@@ -19,6 +19,7 @@ data Class = Class
   , cIncludes :: [Include] 
   , cMethods :: [Method]
   , cMembers :: [Member]
+  , cStructors :: [Structor]
   } deriving (Show, Eq)
 
 type Body = String
@@ -28,6 +29,10 @@ data Method = Method Visibility Type Identifier ParameterList Body Modifier
 
 data MethodName = SimpleName String
                 | Operator String
+
+data Structor = Constructor String Body
+              | Destructor  String Body
+  deriving (Show, Eq)
 
 data ParameterList = ParameterList String
   deriving (Show, Eq)
@@ -39,7 +44,7 @@ data Include = Include String
   deriving (Show, Eq)
 
 data Visibility = Public | Private
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 data Modifier = Default | Const
   deriving (Show, Eq)
@@ -99,7 +104,7 @@ identifier = do
 
 visibility = do
   private <- try (string "private") <|> try (string "public") <|> string ""
-  spaces
+  skipMany $ oneOf " "
   return $ visFromStr private
 
 visFromStr "" = Private
@@ -126,7 +131,7 @@ signature = do
   char '\n'
   return $ (vis, Type returnType, (Identifier funcName), parameters, mod)
 
-operators = ["=", "==", "+", "+", "-", "*", "+=", "-=", "*=", "!="]
+operators = ["=", "==", "+", "+", "-", "*", "+=", "-=", "*=", "!=", "^"]
 operators' = map ((flip (++)) (reverse "operator")) operators 
 identifierChars = "qwertzuiopasdfghjklyxcvbnmQWERTZUIOPASDFGHJKLYXCVBNM123456789_"
 
@@ -185,10 +190,27 @@ clazz = do
   includes <- many include
   skipMany $ oneOf "\n" 
   members <- many $ try member
+  skipMany $ oneOf "\n" 
+  structors <- many structor
   --foo <- many simpleMem
   skipMany $ oneOf "\n" 
   methods <- many method
-  return $ Class classname preIncludes includes methods members
+  return $ Class classname preIncludes includes methods members structors
+
+structor = do
+  stype <- try (string "con") <|> (string "de") 
+  string "structor"
+  params <- many (noneOf "\n")
+  char '\n'
+  indent <- many1 (oneOf " ")
+  line1 <- many (noneOf "\n")
+  char '\n'
+  lines <- many (prefixedLines indent)
+  char '\n'
+  let body = (joinLines . (map ((++) "  "))) (line1:lines)
+  case stype of
+    "de" ->  return $ Destructor  params body
+    "con" -> return $ Constructor params body
 
 method = do
   (visibility, returnType, name, parameters, modifier) <- signature
@@ -242,24 +264,23 @@ readPLine input = case parse (many (prefixedLines "  ")) "line00" input of
   Left err -> "No match:" ++ (show err)
   Right val -> show val
 
-mkFiles :: Class -> (String, String)
-mkFiles (Class name preIncludes includes methods _) = undefined
-
 upperStr = map toUpper
 lowerStr = map toLower
 
 mkImpl :: Class -> String
-mkImpl (Class name _ includes methods _) =
+mkImpl (Class name _ includes methods _ xstructors) =
   joinLines [
       "#include \"" ++ (lowerStr name) ++ ".h\""
-    , joinLines $ map (implMethod name) methods
+    --, joinLines $ map ((joinLines . (implMethod name)) methods
+    , finishImplBlock name xstructors
+    , finishImplBlock name methods
     , ""
     , renderIncludes includes
     ]
 
 
 mkHeader :: Class -> String
-mkHeader  (Class name preIncludes includes methods members) =
+mkHeader  (Class name preIncludes includes methods members structors) =
   joinLines [
       "#ifndef " ++ (upperStr name) ++ "_H"
     , "#define " ++ (upperStr name) ++ "_H"
@@ -267,31 +288,138 @@ mkHeader  (Class name preIncludes includes methods members) =
     , renderIncludes preIncludes
     , ""
     , "class " ++ name ++ "{"
+    , "public:"
+    , finishBlock name structors
+    , finishBlock name puMt
+    , finishBlock name puC
+    , finishBlock name puO
     , ""
-    , joinLines $ map headerMethod methods
+    , "private:"
+    , finishBlock name prMt
+    , finishBlock name prC
+    , finishBlock name prO
     --, joinLines $ mkMemberHeader members 
     , "};"
     , ""
     , "#endif"
     ]
+  where
+    (puC, prC, puO, prO) = mkMemberHeader members
+    (puMt, prMt) = splitMethods methods
 
-mkMemberHeader members = undefined
+
+type Lin = String
+type Block = [Lin]
+
+class HeaderContributor a where
+  toHeaderLines :: String -> a -> Block
+
+class ImplContributor a where
+  toImplLines :: String -> a -> Block
+
+mkHdBlock :: HeaderContributor a => String -> a -> Block
+mkHdBlock className x = toHeaderLines className x
+
+mkHdBlocks :: HeaderContributor a => String -> [a] -> [Block]
+mkHdBlocks className xs = map (mkHdBlock className) xs
+
+mergeBlocks :: [Block] -> Block
+mergeBlocks = foldr (++) []
+
+finishBlock :: HeaderContributor a => String -> [a] -> String
+finishBlock className xs =  joinLines $ mergeBlocks $ (mkHdBlocks className) xs
+
+mkImplBlock :: ImplContributor a => String -> a -> Block
+mkImplBlock className x = toImplLines className x
+
+mkImplBlocks :: ImplContributor a => String -> [a] -> [Block]
+mkImplBlocks className xs = map (mkImplBlock className) xs
+
+mergeImplBlocks :: [Block] -> Block
+mergeImplBlocks = foldr (++) []
+
+finishImplBlock :: ImplContributor a => String -> [a] -> String
+finishImplBlock className xs =  joinLines $ mergeBlocks $ (mkImplBlocks className) xs
+
+
+instance HeaderContributor Member where 
+  toHeaderLines _ (ObjectMember _ (Type typ) (Identifier name)) = 
+   [ "  " ++ typ ++ " " ++ name ++ ";"]
+  toHeaderLines _ (ClassMember visibility (Type typ) (Identifier name)) = 
+   [ "  " ++ typ ++ " " ++ name ++ ";"]
+
+instance ImplContributor Member where 
+  toImplLines _ (ObjectMember _ _ _) = [] 
+  toImplLines clazz (ClassMember _ (Type typ) (Identifier name)) = 
+   [typ ++ " " ++ clazz ++ "::" ++ name ++ ";"]
+
+instance HeaderContributor Method where
+  toHeaderLines _ m = [headerMethod m]
+
+instance ImplContributor Method where 
+  toImplLines = implMethod 
+
+instance HeaderContributor Structor where
+  toHeaderLines = headerStructor
+
+instance ImplContributor Structor where 
+  toImplLines = implStructor 
+
+vToStr :: Visibility -> String
+vToStr Public  = "public"
+vToStr Private = "private"
+
+
+mkMemberHeader members = (puC, prC, puO, prO)
   where
     (classMs, objectMs) = partition isClass members
+    (puC, prC) = partition isPublic classMs
+    (puO, prO) = partition isPublic objectMs
     isClass (ClassMember _ _ _) = True
     isClass (ObjectMember _ _ _) = False
 
+isPublic (ObjectMember Public _ _) = True
+isPublic (ObjectMember _ _ _) = False
+
+isPublic (ClassMember Public _ _) = True
+isPublic (ClassMember _ _ _) = False
+
+headerStructor className (Constructor params _) =
+  ["  " ++ className ++ params ++ ";"]
+headerStructor className (Destructor params _) =
+  ["  ~" ++ className ++ params ++ ";"]
 
 headerMethod (Method v (Type returnT) (Identifier name) (ParameterList ps) _ _) =
    "  " ++ returnT ++ " " ++ name ++ "(" ++ ps ++ ");" 
 
 implMethod className (Method visibility (Type returnT) (Identifier name) (ParameterList ps) body _) =
-  joinLines [
+    [
       returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") {"
     , body
     , "}"
     , ""
     ]
+
+implStructor className (Destructor head body ) =
+    [
+      "  " ++ className ++ "::~" ++ head ++ "{"
+    , body
+    , "}"
+    , ""
+    ]
+
+implStructor className (Constructor head body ) =
+    [
+      "  " ++ className ++ "::" ++ head ++ "{"
+    , body
+    , "}"
+    , ""
+    ]
+
+isPubMeth (Method Public _ _ _ _ _) = True
+isPubMeth (Method _ _ _ _ _ _) = False
+
+splitMethods = partition isPubMeth
 
 
 renderIncludes includes = joinLines $ map mkLne includes
