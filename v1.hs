@@ -40,7 +40,10 @@ data ParameterList = ParameterList String
 data Parameter = Parameter Type Identifier
   deriving (Show, Eq)
 
-data Include = Include String
+data IncludeType = Global | Local
+  deriving (Show, Eq)
+
+data Include = Include String IncludeType
   deriving (Show, Eq)
 
 data Visibility = Public | Private
@@ -131,8 +134,8 @@ signature = do
   char '\n'
   return $ (vis, Type returnType, (Identifier funcName), parameters, mod)
 
-operators = ["=", "==", "+", "+", "-", "*", "+=", "-=", "*=", "!=", "^"]
-operators' = map ((flip (++)) (reverse "operator")) operators 
+operators = ["=", "==", "+", "+", "-", "*", "+=", "-=", "*=", "!=", "^", "^=", "/", "/=", "[]", "%"]
+operators' = map ((flip (++)) (reverse "operator")) (map reverse operators)
 identifierChars = "qwertzuiopasdfghjklyxcvbnmQWERTZUIOPASDFGHJKLYXCVBNM123456789_"
 
 contains xs s = isJust $ find (\c -> c == s) xs
@@ -149,15 +152,17 @@ splitTypeAndName' :: String -> (String, String)
 splitTypeAndName' input = (reverse t, reverse h)
   where
     rvsd = reverse input
-    identS = fromJust $ findIndex (not . isIdentC) rvsd
-    (h, t) = splitAt identS rvsd
+    mbidentS = findIndex (not . isIdentC) rvsd
+    identS (Just a) = a
+    identS Nothing = 1
+    (h, t) = splitAt (identS mbidentS) rvsd
     
 -- test if method is an overloaded operator
 testOperator :: String -> Maybe (String, String)
 testOperator s = if null filtered then
                   Nothing
                   else
-                    Just $ head filtered
+                  Just $ head filtered
   where
     both = zip operators' (repeat (reverse s))
     filtered = [ ( (reverse . (drop (length op))) full, reverse op) | (op, full) <- both, op `isPrefixOf` full] 
@@ -183,19 +188,18 @@ parseList = do
 clazz :: Parser Class
 clazz = do
   skipMany $ oneOf "\n" 
-  preIncludes <- many include
+  preIncludes <- many $ try include
   skipMany $ oneOf "\n" 
   (Identifier classname) <- classSignature 
   skipMany $ oneOf "\n" 
-  includes <- many include
+  includes <- many $ try include
   skipMany $ oneOf "\n" 
   members <- many $ try member
   skipMany $ oneOf "\n" 
-  structors <- many structor
-  --foo <- many simpleMem
+  structors <- many (try structor)
   skipMany $ oneOf "\n" 
   methods <- many method
-  return $ Class classname preIncludes includes methods members structors
+  return $ Class classname preIncludes includes methods  members structors
 
 structor = do
   stype <- try (string "con") <|> (string "de") 
@@ -248,10 +252,16 @@ prefixedLines indent = do
 include = do
   string "#include"
   spaces
-  char '"'
-  filen <- many (noneOf "\"")
-  char '"'
-  return $ Include filen
+  wrapC <- try (char '"') <|> (char '<')
+  filen <- many (noneOf "\">")
+  skipMany1 (oneOf "\">")
+  skipMany $ oneOf " "
+  skipMany $ oneOf "\n"
+  return $ Include filen (foo wrapC)
+
+foo :: Char -> IncludeType
+foo '"' = Local
+foo _ = Global
 
 classSignature = do
   string "class"
@@ -270,12 +280,12 @@ lowerStr = map toLower
 mkImpl :: Class -> String
 mkImpl (Class name _ includes methods _ xstructors) =
   joinLines [
-      "#include \"" ++ (lowerStr name) ++ ".h\""
     --, joinLines $ map ((joinLines . (implMethod name)) methods
+      "#include \"" ++ (lowerStr name) ++ ".h\""
+    , finishImplBlock name includes
     , finishImplBlock name xstructors
     , finishImplBlock name methods
     , ""
-    , renderIncludes includes
     ]
 
 
@@ -356,6 +366,14 @@ instance ImplContributor Member where
 instance HeaderContributor Method where
   toHeaderLines _ m = [headerMethod m]
 
+--instance HeaderContributor Include where
+--  toHeaderLines _ (Include f Local) = ["#include \"" ++ f ++ "\""]
+--toHeaderLines _ (Include f Global) = ["#include <" ++ f ++ ">"]
+
+instance ImplContributor Include where 
+  toImplLines _ (Include f Local) = ["#include \"" ++ f ++ "\""]
+  toImplLines _ (Include f Global) = ["#include <" ++ f ++ ">"]
+
 instance ImplContributor Method where 
   toImplLines = implMethod 
 
@@ -389,12 +407,12 @@ headerStructor className (Constructor params _) =
 headerStructor className (Destructor params _) =
   ["  ~" ++ className ++ params ++ ";"]
 
-headerMethod (Method v (Type returnT) (Identifier name) (ParameterList ps) _ _) =
-   "  " ++ returnT ++ " " ++ name ++ "(" ++ ps ++ ");" 
+headerMethod (Method v (Type returnT) (Identifier name) (ParameterList ps) _ m) =
+   "  " ++ returnT ++ " " ++ name ++ "(" ++ ps ++ ")" ++ (modToStr m) ++  ";" 
 
-implMethod className (Method visibility (Type returnT) (Identifier name) (ParameterList ps) body _) =
+implMethod className (Method visibility (Type returnT) (Identifier name) (ParameterList ps) body m) =
     [
-      returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") {"
+      returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") " ++ (modToStr m) ++ " {"
     , body
     , "}"
     , ""
@@ -402,7 +420,7 @@ implMethod className (Method visibility (Type returnT) (Identifier name) (Parame
 
 implStructor className (Destructor head body ) =
     [
-      "  " ++ className ++ "::~" ++ head ++ "{"
+      className ++ "::~" ++ className ++ head ++ "{"
     , body
     , "}"
     , ""
@@ -410,7 +428,7 @@ implStructor className (Destructor head body ) =
 
 implStructor className (Constructor head body ) =
     [
-      "  " ++ className ++ "::" ++ head ++ "{"
+      className ++ "::" ++ className ++ head ++ "{"
     , body
     , "}"
     , ""
@@ -421,6 +439,13 @@ isPubMeth (Method _ _ _ _ _ _) = False
 
 splitMethods = partition isPubMeth
 
+modToStr Const = "const"
+modToStr _ = ""
 
 renderIncludes includes = joinLines $ map mkLne includes
-  where mkLne (Include filen) = "#include " ++ "\"" ++ filen ++ "\""
+  where 
+    mkLne (Include filen Local) = "#include " ++ "\"" ++ filen ++ "\""
+    mkLne (Include filen Global) = "#include " ++ "<" ++ filen ++ ">"
+    
+
+

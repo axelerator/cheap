@@ -1,0 +1,126 @@
+class Vec3
+
+#include <math.h>
+#include <string.h>
+
+float c[3];
+
+constructor(float fx, float fy, float fz)
+  c[0] = fx;
+  c[1] = fy;
+  c[2] = fz;
+
+constructor(const float *v)
+  memcpy(c, v, 3 * sizeof(Vec3));
+
+constructor(float fn)
+  c[0] = c[1] = c[2] = fn;
+
+destructor()
+  ;
+
+public const float* getFloatArray() const
+  return c;
+
+public bool operator==(const Vec3& v) const
+  return ( (c[0] == v.c[0]) &&  (c[1] == v.c[1]) &&  (c[2] == v.c[2]) );
+
+public Vec3& operator+=(const Vec3& v) 
+  c[0] += v.c[0];
+  c[1] += v.c[1];
+  c[2] += v.c[2];
+  return (*this);
+
+public Vec3& operator-=(const Vec3& v)
+  c[0] -= v.c[0];
+  c[1] -= v.c[1];
+  c[2] -= v.c[2];
+  return (*this);
+
+public Vec3& operator*=(float f)
+  c[0] *= f;
+  c[1] *= f;
+  c[2] *= f;
+  return (*this);
+
+public Vec3& operator/=(float f)
+  float s = 1.0f/f;
+  c[0] *= s;
+  c[1] *= s;
+  c[2] *= s;
+  return (*this);
+
+public Vec3& operator=(const Vec3& v)
+  memcpy(this, v.c, sizeof(Vec3));
+  return (*this);
+
+public Vec3& operator^=(const Vec3& v)
+  c[0] *= v.c[0];
+  c[1] *= v.c[1];
+  c[2] *= v.c[2];
+  return *this;
+
+public Vec3 operator^(const Vec3& op) const
+  return Vec3(c[0] * op.c[0], c[1] * op.c[1], c[2] * op.c[2] );
+
+public Vec3 operator+() const
+  return Vec3(*this);
+
+public Vec3 operator-() const
+  return Vec3(-c[0], -c[1], -c[2]);
+
+public Vec3 operator+(const Vec3& v) const
+  return Vec3(c[0]+v.c[0], c[1]+v.c[1], c[2]+v.c[2]);
+
+public Vec3 operator-(const Vec3& v) const
+  return Vec3(c[0]-v.c[0], c[1]-v.c[1], c[2]-v.c[2]);
+
+public Vec3 operator%(const Vec3& v) const
+  return Vec3(c[1]*v.c[2] - c[2]*v.c[1], c[2]*v.c[0] - c[0]*v.c[2], c[0]*v.c[1] - c[1]*v.c[0]);
+
+public Vec3 operator+(float f) const
+  return Vec3(c[0]+f, c[1]+f, c[2]+f);
+
+public Vec3 operator-(float f) const
+  return Vec3(c[0]-f, c[1]-f, c[2]-f);
+
+public Vec3 operator*(float f) const
+  return Vec3(c[0]*f, c[1]*f, c[2]*f);
+
+public Vec3 operator/(float f) const
+  const float s = 1.0f/f;
+  return Vec3(c[0]*s, c[1]*s, c[2]*s);
+
+public float& operator[](unsigned int i)
+  return c[i];
+
+public float operator[](unsigned int i) const
+  return c[i];
+
+public float operator*(const Vec3& v) const
+    return c[0]*v.c[0] + c[1]*v.c[1] + c[2]*v.c[2];
+
+public float length() const
+  return static_cast<float>(sqrt(c[0]*c[0] + c[1]*c[1] + c[2]*c[2]));
+
+public float lengthSquare() const
+  return static_cast<float>(c[0]*c[0] + c[1]*c[1] + c[2]*c[2]);
+
+public Vec3 normal() const
+  const float s = 1.0f / length();
+  return Vec3(c[0]*s, c[1]*s, c[2]*s);
+
+public Vec3& normalize()
+  float s = 1.0f / length();
+  this->operator*=(s );
+  return (*this);
+
+public float normalizeRL()
+  const float l = length();
+  const float s = 1.0f / l;
+  this->operator*=(s );
+  return l;
+
+public float angleTo(const Vec3& rhs) const
+  return acos(operator *(rhs)/(length()*rhs.length()));
+

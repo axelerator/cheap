@@ -3,3 +3,4 @@ cabal-dev
 v1
 *.o
 *.hi
+dist
