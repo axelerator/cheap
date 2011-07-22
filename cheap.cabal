@@ -1,17 +1,17 @@
-Name:                parsec-proc
+Name:                cheap
 Version:             0.1
-Synopsis:            Imports various formats of betting events.
+Synopsis:            Generate header and implementation C files from a single file
 License:             AllRightsReserved
 License-file:        LICENSE
-Author:              Timo B. Hübel, Axel Tetzlaff
-Maintainer:          timo.huebel@fortytools.com
-Category:            Library
+Author:              Axel Tetzlaff
+Maintainer:          axel.tetzlaff@fortytools.com
+Category:            Application
 Build-type:          Simple
 
 Cabal-version:       >=1.2
 
-Executable daemon
-  Main-is:           v1.hs
+Executable cheap
+  Main-is:           cheap.hs
 
   Build-depends:   haskell2010 >= 1.0 && < 2.0
 
