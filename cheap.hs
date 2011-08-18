@@ -24,13 +24,17 @@ data Class = Class
 
 type Body = String
 
+
+data Initializers = Initializers String | NoInits
+  deriving (Show, Eq)
+
 data Method = Method Visibility Type Identifier ParameterList Body Modifier
   deriving (Show, Eq)
 
 data MethodName = SimpleName String
                 | Operator String
 
-data Structor = Constructor String Body
+data Structor = Constructor String Initializers Body
               | Destructor  String Body
   deriving (Show, Eq)
 
@@ -69,9 +73,9 @@ symbol :: Parser Char
 symbol = oneOf "!$%&|*+-/:<=>?@^_~"
 
 readExpr :: String -> String
-readExpr input = case parse (spaces >> parseList) "list" input of
+readExpr input = case parse (initializers) "list" input of
     Left err -> "No match: " ++ show err
-    Right val -> "Found value"
+    Right val -> "Found value" ++ (show val)
 
 spaces :: Parser ()
 spaces = skipMany1 space
@@ -87,9 +91,9 @@ main = do
     Right classR -> do
           let hed = mkHeader classR
           let impl = mkImpl classR
-          putStrLn hed
-          putStrLn $ take 20 $ repeat '-'
-          putStrLn impl
+          --putStrLn hed
+          --putStrLn $ take 20 $ repeat '-'
+          --putStrLn impl
           writeFile ((lowerStr (cName classR)) ++ ".h") hed  
           writeFile ((lowerStr (cName classR)) ++ ".c") impl  
 
@@ -206,6 +210,12 @@ structor = do
   string "structor"
   params <- many (noneOf "\n")
   char '\n'
+  initials <- try  initializers <|> string ""
+  let initT = if null initials
+                then
+                  NoInits
+                else
+                  Initializers initials
   indent <- many1 (oneOf " ")
   line1 <- many (noneOf "\n")
   char '\n'
@@ -214,10 +224,11 @@ structor = do
   let body = (joinLines . (map ((++) "  "))) (line1:lines)
   case stype of
     "de" ->  return $ Destructor  params body
-    "con" -> return $ Constructor params body
+    "con" -> return $ Constructor params initT body
 
 method = do
   (visibility, returnType, name, parameters, modifier) <- signature
+
   indent <- many1 (oneOf " ")
   line1 <- many (noneOf "\n")
   char '\n'
@@ -269,10 +280,11 @@ classSignature = do
   classname <- identifier
   return classname
 
-readPLine :: String -> String
-readPLine input = case parse (many (prefixedLines "  ")) "line00" input of
-  Left err -> "No match:" ++ (show err)
-  Right val -> show val
+initializers = do
+  char ':'
+  i <- many $ noneOf "\n"
+  char '\n'
+  return $ i
 
 upperStr = map toUpper
 lowerStr = map toLower
@@ -402,7 +414,10 @@ isPublic (ObjectMember _ _ _) = False
 isPublic (ClassMember Public _ _) = True
 isPublic (ClassMember _ _ _) = False
 
-headerStructor className (Constructor params _) =
+renderInitializers NoInits = ""
+renderInitializers (Initializers s) = ": " ++ s
+
+headerStructor className (Constructor params _ _) =
   ["  " ++ className ++ params ++ ";"]
 headerStructor className (Destructor params _) =
   ["  ~" ++ className ++ params ++ ";"]
@@ -412,7 +427,7 @@ headerMethod (Method v (Type returnT) (Identifier name) (ParameterList ps) _ m) 
 
 implMethod className (Method visibility (Type returnT) (Identifier name) (ParameterList ps) body m) =
     [
-      returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") " ++ (modToStr m) ++ " {"
+      returnT ++ "  " ++ className ++ "::" ++ name ++ "(" ++ ps ++ ") " ++ (modToStr m) ++  " {"
     , body
     , "}"
     , ""
@@ -426,15 +441,15 @@ implStructor className (Destructor head body ) =
     , ""
     ]
 
-implStructor className (Constructor head body ) =
+implStructor className (Constructor head inits body ) =
     [
-      className ++ "::" ++ className ++ head ++ "{"
+      className ++ "::" ++ className ++ head ++ (renderInitializers inits) ++ "{"
     , body
     , "}"
     , ""
     ]
 
-isPubMeth (Method Public _ _ _ _ _) = True
+isPubMeth (Method Public  _ _ _ _ _) = True
 isPubMeth (Method _ _ _ _ _ _) = False
 
 splitMethods = partition isPubMeth
