@@ -1,9 +1,13 @@
+#include <vector>
+
 class Vec3
 
 #include <math.h>
 #include <string.h>
 
 float c[3];
+std::vector<float> foo;
+
 
 constructor(float fx, float fy, float fz)
   c[0] = fx;

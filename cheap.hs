@@ -15,6 +15,7 @@ data Clib = Clib [Class]
 
 data Class = Class 
   { cName :: String
+  , cSuper :: String
   , cPreIncludes :: [Include]
   , cIncludes :: [Include] 
   , cMethods :: [Method]
@@ -95,7 +96,7 @@ main = do
           --putStrLn $ take 20 $ repeat '-'
           --putStrLn impl
           writeFile ((lowerStr (cName classR)) ++ ".h") hed  
-          writeFile ((lowerStr (cName classR)) ++ ".c") impl  
+          writeFile ((lowerStr (cName classR)) ++ ".cc") impl  
 
 readClass :: String -> Either ParseError Class
 readClass input = parse clazz "sign" input
@@ -194,7 +195,7 @@ clazz = do
   skipMany $ oneOf "\n" 
   preIncludes <- many $ try include
   skipMany $ oneOf "\n" 
-  (Identifier classname) <- classSignature 
+  ((Identifier classname), superclasses)  <- classSignature 
   skipMany $ oneOf "\n" 
   includes <- many $ try include
   skipMany $ oneOf "\n" 
@@ -203,7 +204,7 @@ clazz = do
   structors <- many (try structor)
   skipMany $ oneOf "\n" 
   methods <- many method
-  return $ Class classname preIncludes includes methods  members structors
+  return $ Class classname superclasses preIncludes includes methods  members structors
 
 structor = do
   stype <- try (string "con") <|> (string "de") 
@@ -278,7 +279,8 @@ classSignature = do
   string "class"
   spaces
   classname <- identifier
-  return classname
+  superclasses <- many (noneOf "\n")
+  return (classname, superclasses)
 
 initializers = do
   char ':'
@@ -290,7 +292,7 @@ upperStr = map toUpper
 lowerStr = map toLower
 
 mkImpl :: Class -> String
-mkImpl (Class name _ includes methods _ xstructors) =
+mkImpl (Class name _ _ includes methods _ xstructors) =
   joinLines [
     --, joinLines $ map ((joinLines . (implMethod name)) methods
       "#include \"" ++ (lowerStr name) ++ ".h\""
@@ -300,16 +302,15 @@ mkImpl (Class name _ includes methods _ xstructors) =
     , ""
     ]
 
-
 mkHeader :: Class -> String
-mkHeader  (Class name preIncludes includes methods members structors) =
+mkHeader  (Class name supers preIncludes includes methods members structors) =
   joinLines [
       "#ifndef " ++ (upperStr name) ++ "_H"
     , "#define " ++ (upperStr name) ++ "_H"
     , ""
     , renderIncludes preIncludes
     , ""
-    , "class " ++ name ++ "{"
+    , "class " ++ name ++ supers  ++ "{"
     , "public:"
     , finishBlock name structors
     , finishBlock name puMt
